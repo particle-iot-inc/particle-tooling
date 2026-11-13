@@ -1,0 +1,10 @@
+{
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": false,
+		"module": "commonjs",
+		"target": "es2022",
+		"skipLibCheck": true,
+		"noEmit": true
+	}
+}

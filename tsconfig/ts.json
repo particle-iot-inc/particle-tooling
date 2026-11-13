@@ -1,0 +1,21 @@
+{
+	"compilerOptions": {
+		"noEmit": true,
+		"target": "ES2024",
+		"lib": ["ES2024", "ESNext.Collection", "ESNext.Iterator"],
+		"module": "NodeNext",
+		"strict": true,
+		"noImplicitOverride": true,
+		"noUncheckedIndexedAccess": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"allowJs": true,
+		"maxNodeModuleJsDepth": 2,
+		"resolveJsonModule": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"inlineSources": true
+	},
+	"include": ["${configDir}/src/**/*", "${configDir}/test/**/*"]
+}

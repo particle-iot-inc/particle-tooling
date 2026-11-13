@@ -1,0 +1,68 @@
+{
+	"name": "@particle/tooling",
+	"version": "0.1.0",
+	"description": "Shared oxlint, oxfmt and TypeScript configuration for Particle projects",
+	"homepage": "https://github.com/particle-iot-inc/particle-tooling",
+	"bugs": {
+		"url": "https://github.com/particle-iot-inc/particle-tooling/issues"
+	},
+	"license": "ISC",
+	"author": "",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/particle-iot-inc/particle-tooling.git"
+	},
+	"bin": {
+		"particle-tooling-init": "bin/init.js"
+	},
+	"files": [
+		"bin/init.js",
+		"lib",
+		"oxfmt.js",
+		"oxlint-typescript.js",
+		"oxlint.js",
+		"tsconfig"
+	],
+	"type": "module",
+	"exports": {
+		"./oxlint": "./oxlint.js",
+		"./oxlint-typescript": "./oxlint-typescript.js",
+		"./oxfmt": "./oxfmt.js",
+		"./tsconfig/*.json": "./tsconfig/*.json"
+	},
+	"publishConfig": {
+		"access": "restricted"
+	},
+	"scripts": {
+		"check": "npm run lint && npm run fmt:check",
+		"lint": "oxlint --deny-warnings",
+		"fmt": "oxfmt",
+		"fmt:check": "oxfmt --check",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"oxfmt": "~0.78.0",
+		"oxlint": "^1.93.0",
+		"oxlint-tsgolint": "^7.0.2007",
+		"typescript": "^7.0.2",
+		"vitest": "^5.1.0"
+	},
+	"peerDependencies": {
+		"oxfmt": "~0.78.0",
+		"oxlint": "^1.93.0",
+		"oxlint-tsgolint": "^7.0.2007",
+		"typescript": "^7.0.2"
+	},
+	"peerDependenciesMeta": {
+		"typescript": {
+			"optional": true
+		},
+		"oxlint-tsgolint": {
+			"optional": true
+		}
+	},
+	"engines": {
+		"node": ">=22.23.4",
+		"npm": ">=10"
+	}
+}
