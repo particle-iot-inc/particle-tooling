@@ -1,3 +1,4 @@
+/** The oxlint config published as `@particle/tooling/oxlint-typescript`, for TypeScript projects. */
 import { defineConfig } from 'oxlint';
 
 import base from './oxlint.js';

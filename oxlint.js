@@ -1,3 +1,4 @@
+/** The oxlint config published as `@particle/tooling/oxlint`, for JavaScript projects. */
 import { defineConfig } from 'oxlint';
 
 const TEST_FILES = ['**/*.{spec,test,e2e,unit,integration}.{mjs,cjs,js,ts}', '**/test/**/*.{mjs,cjs,js,ts}'];

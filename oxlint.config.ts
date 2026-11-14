@@ -1,3 +1,4 @@
+/** Linting for this repo, set up like a consumer. */
 import { defineConfig } from 'oxlint';
 
 import shared from './oxlint.js';
