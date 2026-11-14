@@ -8,11 +8,11 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { applyPlan, createPlan, detectStyle, formatPlan, hasChanges } from '../lib/migrate.js';
+import toolingPackage from '../package.json' with { type: 'json' };
 
 const execFile = promisify(execFileCallback);
-const { version } = JSON.parse(await readFile(path.resolve(import.meta.dirname, '../package.json'), 'utf8'));
 /** The migration writes this package's own version into the project. */
-const TOOLING_SPEC = `^${version}`;
+const TOOLING_SPEC = `^${toolingPackage.version}`;
 const bin = path.resolve(import.meta.dirname, '../bin/init.js');
 
 const SERVICE_TSCONFIG = `{
