@@ -1,6 +1,6 @@
 {
 	"name": "@particle/tooling",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"description": "Shared oxlint, oxfmt and TypeScript configuration for Particle projects",
 	"homepage": "https://github.com/particle-iot-inc/particle-tooling",
 	"bugs": {
