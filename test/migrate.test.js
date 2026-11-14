@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { applyPlan, createPlan, detectStyle, formatPlan, hasChanges } from '../lib/migrate.js';
 
 const execFile = promisify(execFileCallback);
+const { version } = JSON.parse(await readFile(path.resolve(import.meta.dirname, '../package.json'), 'utf8'));
+/** The migration writes this package's own version into the project. */
+const TOOLING_SPEC = `^${version}`;
 const bin = path.resolve(import.meta.dirname, '../bin/init.js');
 
 const SERVICE_TSCONFIG = `{
@@ -101,7 +104,7 @@ describe('a new project', () => {
 		expect(await readJson('tsconfig.json')).toEqual({ extends: '@particle/tooling/tsconfig/js.json' });
 		const pkg = await readJson('package.json');
 		expect(pkg.scripts).toEqual({ fmt: 'oxfmt', 'fmt:check': 'oxfmt --check' });
-		expect(pkg.devDependencies).toEqual({ '@particle/tooling': '^0.1.0' });
+		expect(pkg.devDependencies).toEqual({ '@particle/tooling': TOOLING_SPEC });
 	});
 
 	it('gets TypeScript 7, both tsconfigs and a build script as a service', async () => {
@@ -114,7 +117,7 @@ describe('a new project', () => {
 		expect(await read('.gitignore')).toBe('build/\n');
 		const pkg = await readJson('package.json');
 		expect(pkg.devDependencies).toEqual({
-			'@particle/tooling': '^0.1.0',
+			'@particle/tooling': TOOLING_SPEC,
 			'oxlint-tsgolint': '^7.0.2007',
 			typescript: '^7.0.2'
 		});
@@ -165,11 +168,11 @@ describe('an ESLint project', () => {
 			'remove eslint, eslint-config-particle',
 			'typescript ^6.0.2 -> ^7.0.2',
 			'add oxlint-tsgolint ^7.0.2007 (runs the type-aware lint rules, such as no-floating-promises)',
-			'add @particle/tooling ^0.1.0 (installs oxlint and oxfmt as peer dependencies)'
+			`add @particle/tooling ${TOOLING_SPEC} (installs oxlint and oxfmt as peer dependencies)`
 		]);
 		const pkg = await readJson('package.json');
 		expect(pkg.devDependencies).toEqual({
-			'@particle/tooling': '^0.1.0',
+			'@particle/tooling': TOOLING_SPEC,
 			'oxlint-tsgolint': '^7.0.2007',
 			typescript: '^7.0.2',
 			vitest: '^4.1.2'
@@ -617,7 +620,9 @@ describe('formatPlan', () => {
 		expect(text).toContain(red('  - delete eslint.config.mjs (not tracked by git, so it cannot be restored)'));
 		expect(text).toContain(yellow('  - typescript ^6.0.2 -> ^7.0.2'));
 		expect(text).toContain(yellow('  - check: "tsc && eslint" -> "tsc && oxlint --deny-warnings && oxfmt --check"'));
-		expect(text).toContain(green('  - add @particle/tooling ^0.1.0 (installs oxlint and oxfmt as peer dependencies)'));
+		expect(text).toContain(
+			green(`  - add @particle/tooling ${TOOLING_SPEC} (installs oxlint and oxfmt as peer dependencies)`)
+		);
 		expect(text).toContain(green('  - create oxlint.config.ts'));
 	});
 
