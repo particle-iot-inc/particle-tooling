@@ -46,10 +46,8 @@
 		"access": "restricted"
 	},
 	"scripts": {
-		"check": "npm run lint && npm run fmt:check",
-		"lint": "oxlint --deny-warnings",
+		"check": "oxlint --deny-warnings && oxfmt --check",
 		"fmt": "oxfmt",
-		"fmt:check": "oxfmt --check",
 		"test": "vitest run"
 	},
 	"devDependencies": {
