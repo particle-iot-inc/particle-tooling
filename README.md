@@ -20,7 +20,7 @@ It asks what kind of project this is (or takes `--style`), prints everything it 
 
 What it does, depending on what it finds:
 
-- **Dependencies:** removes ESLint and its configs and plugins, adds `@particle/tooling` (which installs `oxlint` and `oxfmt` as peers), and moves `typescript` to version 7. TypeScript projects also get `oxlint-tsgolint`, which runs the type-aware lint rules.
+- **Dependencies:** removes ESLint and its configs and plugins, adds `@particle/tooling` (which installs `oxlint`, `oxfmt` and `oxlint-tsgolint` as peers), and moves `typescript` to version 7.
 - **Lint and format configs:** deletes `eslint.config.*`, `.eslintrc*`, `.oxlintrc.json` and `.oxfmtrc.json`, and creates `oxlint.config.ts` and `oxfmt.config.ts` that re-export the shared configs. TypeScript projects re-export `@particle/tooling/oxlint-typescript`, JavaScript projects `@particle/tooling/oxlint`.
 - **tsconfigs:** rewrites `tsconfig.json` and `tsconfig.build.json` to extend the shared configs, keeping the project's own `include`, `exclude` and `types`. A config with other project-specific compiler options, or one that already extends something else, is left alone and reported for you to migrate by hand.
 - **Sentry:** when the project depends on a `@sentry/*` package, the build config gets `"sourceRoot": "/"`, which strips the build path from source references so Sentry groups issues consistently. Without Sentry it is removed, because it makes Node stack traces point at paths that do not exist.
@@ -55,7 +55,7 @@ The config files are TypeScript, which requires Node 22.23.4 or later.
 | `@particle/tooling/oxlint`            | JavaScript projects                                                                       |
 | `@particle/tooling/oxlint-typescript` | TypeScript projects: the same rules plus the TypeScript rules, with type-aware linting on |
 
-Type-aware rules such as `no-floating-promises` need the `oxlint-tsgolint` package and a `tsconfig.json`. Only the typed rules named in `oxlint-typescript.js` are enforced. The other typed rules in the enabled categories are switched off there, and a project can turn one on in its own config.
+Type-aware rules such as `no-floating-promises` run through `oxlint-tsgolint`, which is installed as a peer dependency, and need a `tsconfig.json`. Only the typed rules named in `oxlint-typescript.js` are enforced. The other typed rules in the enabled categories are switched off there, and a project can turn one on in its own config.
 
 ## Overriding
 

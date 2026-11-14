@@ -118,7 +118,6 @@ describe('a new project', () => {
 		const pkg = await readJson('package.json');
 		expect(pkg.devDependencies).toEqual({
 			'@particle/tooling': TOOLING_SPEC,
-			'oxlint-tsgolint': '^7.0.2007',
 			typescript: '^7.0.2'
 		});
 		expect(await read('oxlint.config.ts')).toBe("export { default } from '@particle/tooling/oxlint-typescript';\n");
@@ -167,13 +166,11 @@ describe('an ESLint project', () => {
 		expect(plan.dependencies).toEqual([
 			'remove eslint, eslint-config-particle',
 			'typescript ^6.0.2 -> ^7.0.2',
-			'add oxlint-tsgolint ^7.0.2007 (runs the type-aware lint rules, such as no-floating-promises)',
-			`add @particle/tooling ${TOOLING_SPEC} (installs oxlint and oxfmt as peer dependencies)`
+			`add @particle/tooling ${TOOLING_SPEC} (installs oxlint, oxfmt and oxlint-tsgolint as peer dependencies)`
 		]);
 		const pkg = await readJson('package.json');
 		expect(pkg.devDependencies).toEqual({
 			'@particle/tooling': TOOLING_SPEC,
-			'oxlint-tsgolint': '^7.0.2007',
 			typescript: '^7.0.2',
 			vitest: '^4.1.2'
 		});
@@ -254,6 +251,23 @@ describe('an ESLint project', () => {
 		const { scripts } = await readJson('package.json');
 		expect(scripts.check).toBe('tsc && oxlint --deny-warnings && oxfmt --check');
 		expect(scripts.lint).toBe('oxlint --deny-warnings');
+	});
+
+	it('removes directly listed oxlint packages, which now come in as peer dependencies', async () => {
+		await writeFiles({
+			'package.json': {
+				name: 'consumer',
+				devDependencies: { oxlint: '^1.0.0', oxfmt: '^0.70.0', 'oxlint-tsgolint': '^7.0.0' }
+			}
+		});
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.dependencies).toContain('remove oxlint, oxfmt, oxlint-tsgolint');
+		expect((await readJson('package.json')).devDependencies).toEqual({
+			'@particle/tooling': TOOLING_SPEC,
+			typescript: '^7.0.2'
+		});
 	});
 
 	it('replaces an aliased older TypeScript', async () => {
@@ -621,7 +635,9 @@ describe('formatPlan', () => {
 		expect(text).toContain(yellow('  - typescript ^6.0.2 -> ^7.0.2'));
 		expect(text).toContain(yellow('  - check: "tsc && eslint" -> "tsc && oxlint --deny-warnings && oxfmt --check"'));
 		expect(text).toContain(
-			green(`  - add @particle/tooling ${TOOLING_SPEC} (installs oxlint and oxfmt as peer dependencies)`)
+			green(
+				`  - add @particle/tooling ${TOOLING_SPEC} (installs oxlint, oxfmt and oxlint-tsgolint as peer dependencies)`
+			)
 		);
 		expect(text).toContain(green('  - create oxlint.config.ts'));
 	});
@@ -679,7 +695,6 @@ describe('particle-tooling-init bin', () => {
 		});
 		expect((await readJson('package.json')).devDependencies).toEqual({
 			'@particle/tooling': 'file:../tooling.tgz',
-			'oxlint-tsgolint': '^7.0.2007',
 			typescript: '^7.0.2'
 		});
 	});
