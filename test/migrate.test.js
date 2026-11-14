@@ -103,7 +103,7 @@ describe('a new project', () => {
 		expect(await read('oxfmt.config.ts')).toBe("export { default } from '@particle/tooling/oxfmt';\n");
 		expect(await readJson('tsconfig.json')).toEqual({ extends: '@particle/tooling/tsconfig/js.json' });
 		const pkg = await readJson('package.json');
-		expect(pkg.scripts).toEqual({ fmt: 'oxfmt', 'fmt:check': 'oxfmt --check' });
+		expect(pkg.scripts).toEqual({ fmt: 'oxfmt' });
 		expect(pkg.devDependencies).toEqual({ '@particle/tooling': TOOLING_SPEC });
 	});
 
@@ -123,7 +123,6 @@ describe('a new project', () => {
 		expect(await read('oxlint.config.ts')).toBe("export { default } from '@particle/tooling/oxlint-typescript';\n");
 		expect(pkg.scripts).toEqual({
 			fmt: 'oxfmt',
-			'fmt:check': 'oxfmt --check',
 			check: 'tsc && oxlint --deny-warnings && oxfmt --check',
 			build: 'rm -rf build/ && tsc -p tsconfig.build.json'
 		});
@@ -197,15 +196,54 @@ describe('an ESLint project', () => {
 		);
 	});
 
-	it('rewrites plain eslint steps in scripts and flags the ones with options', async () => {
+	it('rewrites plain eslint steps in check and removes the lint script', async () => {
 		const plan = await migrate('ts-service');
 
 		const { scripts } = await readJson('package.json');
 		expect(scripts.check).toBe('tsc && oxlint --deny-warnings && oxfmt --check && npm run other');
-		expect(scripts.lint).toBe('eslint --quiet -f unix .');
+		expect(scripts.lint).toBeUndefined();
+		expect(plan.scripts).toContain('remove lint ("eslint --quiet -f unix ."): check runs the linter');
+	});
+
+	it('flags other scripts that run eslint with options', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer', scripts: { 'lint:fix': 'eslint --fix .' } } });
+
+		const plan = await migrate('js');
+
+		expect((await readJson('package.json')).scripts['lint:fix']).toBe('eslint --fix .');
 		expect(plan.attention).toContainEqual(
-			'scripts.lint still runs eslint with options ("eslint --quiet -f unix ."). Update it by hand.'
+			'scripts.lint:fix still runs eslint with options ("eslint --fix ."). Update it by hand.'
 		);
+	});
+
+	it('points scripts that ran the lint script at check', async () => {
+		await writeFiles({
+			'package.json': {
+				name: 'consumer',
+				scripts: { lint: 'eslint', test: 'npm run lint && npm run test:unit', 'test:unit': 'true' }
+			}
+		});
+
+		await migrate('js');
+
+		expect((await readJson('package.json')).scripts).toEqual({
+			test: 'npm run check && npm run test:unit',
+			'test:unit': 'true',
+			fmt: 'oxfmt',
+			check: 'oxlint --deny-warnings && oxfmt --check'
+		});
+	});
+
+	it('inlines the linter into a check script that called the lint script', async () => {
+		await writeFiles({
+			'package.json': { name: 'consumer', scripts: { lint: 'eslint', check: 'npm run lint && tsc' } }
+		});
+
+		await migrate('ts-service');
+
+		const { scripts } = await readJson('package.json');
+		expect(scripts.check).toBe('oxlint --deny-warnings && oxfmt --check && tsc');
+		expect(scripts.lint).toBeUndefined();
 	});
 
 	it('adds the format check to an existing check script that has no lint step', async () => {
@@ -226,18 +264,17 @@ describe('an ESLint project', () => {
 		expect((await readJson('package.json')).scripts.check).toBe(
 			'tsc && oxlint --deny-warnings && npm run format:check'
 		);
-		expect(plan.scripts).toEqual(['add fmt, fmt:check, build']);
+		expect(plan.scripts).toEqual(['add fmt, build']);
 	});
 
-	it('does not add a check or lint script to a JavaScript project', async () => {
+	it('replaces the lint script of a JavaScript project with a check script', async () => {
 		await writeFiles({ 'package.json': { name: 'consumer', scripts: { lint: 'eslint' } } });
 
 		await migrate('js');
 
 		expect((await readJson('package.json')).scripts).toEqual({
-			lint: 'oxlint --deny-warnings',
 			fmt: 'oxfmt',
-			'fmt:check': 'oxfmt --check'
+			check: 'oxlint --deny-warnings && oxfmt --check'
 		});
 	});
 
@@ -250,7 +287,7 @@ describe('an ESLint project', () => {
 
 		const { scripts } = await readJson('package.json');
 		expect(scripts.check).toBe('tsc && oxlint --deny-warnings && oxfmt --check');
-		expect(scripts.lint).toBe('oxlint --deny-warnings');
+		expect(scripts.lint).toBeUndefined();
 	});
 
 	it('removes directly listed oxlint packages, which now come in as peer dependencies', async () => {
@@ -593,7 +630,7 @@ describe('the CI reminder', () => {
 		);
 	});
 
-	it('says when CI runs nothing that checks formatting', async () => {
+	it('says when CI still runs the removed lint script and nothing that checks formatting', async () => {
 		await writeFiles({
 			'package.json': { name: 'consumer', scripts: { lint: 'eslint' } },
 			'.circleci/config.yml': 'steps:\n  - run: npm run lint\n'
@@ -601,9 +638,10 @@ describe('the CI reminder', () => {
 
 		const plan = await createPlan(dir, 'js');
 
-		expect(plan.attention.at(-1)).toBe(
-			'Double check CI: .circleci/config.yml does not appear to run a script that checks formatting. Add a step such as "npm run fmt:check".'
-		);
+		expect(plan.attention.slice(-2)).toEqual([
+			'.circleci/config.yml runs "npm run lint", which was removed. Change it to "npm run check".',
+			'Double check CI: .circleci/config.yml does not appear to run a script that checks formatting. Add a step such as "npm run check".'
+		]);
 	});
 
 	it('says when there is no CI config to look at', async () => {
