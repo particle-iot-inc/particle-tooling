@@ -18,16 +18,28 @@
 	"files": [
 		"bin/init.js",
 		"lib",
+		"oxfmt.d.ts",
 		"oxfmt.js",
+		"oxlint-typescript.d.ts",
 		"oxlint-typescript.js",
+		"oxlint.d.ts",
 		"oxlint.js",
 		"tsconfig"
 	],
 	"type": "module",
 	"exports": {
-		"./oxlint": "./oxlint.js",
-		"./oxlint-typescript": "./oxlint-typescript.js",
-		"./oxfmt": "./oxfmt.js",
+		"./oxlint": {
+			"types": "./oxlint.d.ts",
+			"default": "./oxlint.js"
+		},
+		"./oxlint-typescript": {
+			"types": "./oxlint-typescript.d.ts",
+			"default": "./oxlint-typescript.js"
+		},
+		"./oxfmt": {
+			"types": "./oxfmt.d.ts",
+			"default": "./oxfmt.js"
+		},
 		"./tsconfig/*.json": "./tsconfig/*.json"
 	},
 	"publishConfig": {

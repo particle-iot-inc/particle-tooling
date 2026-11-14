@@ -108,6 +108,12 @@ describe('ts-build-library.json', () => {
 	});
 });
 
+describe('the shared lint and format configs', () => {
+	it('are typed, so a project config that imports them type checks without allowJs', async () => {
+		await expect(runTsc('typed-configs/tsconfig.json')).resolves.toBe('');
+	});
+});
+
 describe('js.json', () => {
 	it('loads JavaScript without type checking it', async () => {
 		const { compilerOptions } = await showConfig('javascript/tsconfig.json');
