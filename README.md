@@ -114,6 +114,18 @@ A TypeScript project has two files. A library extends `ts-build-library.json` in
 
 `tsconfig.build.json` does not inherit from the project's `tsconfig.json`. A compiler option overridden there has to be repeated in `tsconfig.build.json` if the build needs it.
 
+### Libraries: publish `src` with `build`
+
+`ts-build-library.json` emits declaration maps, which point from each `.d.ts` file back to the `.ts` file it came from. For those to work in a consuming project, publish the source alongside the build output:
+
+```json
+{
+	"files": ["build/", "src/", "!**/*.test.ts"]
+}
+```
+
+With `src` in the package, "go to definition" in an editor opens the real TypeScript source. Without it, the map points at a file that is not there and the editor falls back to the declaration file.
+
 A JavaScript project has one file. It covers the whole project unless `include` narrows it:
 
 ```jsonc
@@ -132,7 +144,7 @@ To try local changes in another project, pack this one and point the migration a
 
 ```bash
 $ npm pack
-$ cd ../api-service
+$ cd ../my-service
 $ node ../particle-tooling/bin/init.js --tooling-spec file:../particle-tooling/particle-tooling-0.1.0.tgz
 ```
 
