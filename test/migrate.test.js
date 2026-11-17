@@ -99,14 +99,14 @@ describe('a new project', () => {
 		const plan = await migrate('js');
 
 		expect(plan.files).toEqual([
-			'create oxlint.config.ts',
-			'create oxfmt.config.ts',
+			'create oxlint.config.mts',
+			'create oxfmt.config.mts',
 			'create tsconfig.json',
 			'add .claude/ to .gitignore'
 		]);
 		expect(await read('.gitignore')).toBe('.claude/\n');
-		expect(await read('oxlint.config.ts')).toBe("export { default } from '@particle/tooling/oxlint';\n");
-		expect(await read('oxfmt.config.ts')).toBe("export { default } from '@particle/tooling/oxfmt';\n");
+		expect(await read('oxlint.config.mts')).toBe("export { default } from '@particle/tooling/oxlint';\n");
+		expect(await read('oxfmt.config.mts')).toBe("export { default } from '@particle/tooling/oxfmt';\n");
 		expect(await readJson('tsconfig.json')).toEqual({ extends: '@particle/tooling/tsconfig/js.json' });
 		const pkg = await readJson('package.json');
 		expect(pkg.scripts).toEqual({ fmt: 'oxfmt' });
@@ -126,7 +126,7 @@ describe('a new project', () => {
 			'@particle/tooling': TOOLING_SPEC,
 			typescript: '^7.0.2'
 		});
-		expect(await read('oxlint.config.ts')).toBe("export { default } from '@particle/tooling/oxlint-typescript';\n");
+		expect(await read('oxlint.config.mts')).toBe("export { default } from '@particle/tooling/oxlint-typescript';\n");
 		expect(pkg.scripts).toEqual({
 			fmt: 'oxfmt',
 			check: 'tsc && oxlint --deny-warnings && oxfmt --check',
@@ -497,6 +497,63 @@ describe('existing tsconfigs', () => {
 	});
 });
 
+describe('the lint and format config files', () => {
+	const reExport = "export { default } from '@particle/tooling/oxlint';\n";
+
+	it('are .ts in an ES module package', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer', type: 'module' } });
+
+		const plan = await migrate('js');
+
+		expect(plan.files).toEqual(expect.arrayContaining(['create oxlint.config.ts', 'create oxfmt.config.ts']));
+		expect(await read('oxlint.config.ts')).toBe(reExport);
+		expect(existsSync(path.join(dir, 'oxlint.config.mts'))).toBe(false);
+	});
+
+	it('are .mts in a package with no type or with type commonjs, where Node would not load a .ts one as an ES module', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer', type: 'commonjs' } });
+
+		await migrate('js');
+
+		expect(await read('oxlint.config.mts')).toBe(reExport);
+		expect(await read('oxfmt.config.mts')).toBe("export { default } from '@particle/tooling/oxfmt';\n");
+		expect(existsSync(path.join(dir, 'oxlint.config.ts'))).toBe(false);
+	});
+
+	it('are renamed from .ts to .mts in a package that is not an ES module, keeping their contents', async () => {
+		const custom = "import shared from '@particle/tooling/oxlint';\nexport default { extends: [shared] };\n";
+		await writeFiles({
+			'package.json': { name: 'consumer' },
+			'oxlint.config.ts': custom,
+			'oxfmt.config.ts': '// custom\n'
+		});
+
+		const plan = await migrate('js');
+
+		expect(plan.files).toContain(
+			'rename oxlint.config.ts to oxlint.config.mts (this package is not an ES module, so Node needs the .mts extension to load it)'
+		);
+		expect(await read('oxlint.config.mts')).toBe(custom);
+		expect(await read('oxfmt.config.mts')).toBe('// custom\n');
+		expect(existsSync(path.join(dir, 'oxlint.config.ts'))).toBe(false);
+		expect(existsSync(path.join(dir, 'oxfmt.config.ts'))).toBe(false);
+	});
+
+	it('are left alone when they already exist with an extension that works', async () => {
+		await writeFiles({
+			'package.json': { name: 'consumer', type: 'module' },
+			'oxlint.config.mts': '// custom\n',
+			'oxfmt.config.ts': '// custom\n'
+		});
+
+		const plan = await migrate('js');
+
+		expect(await read('oxlint.config.mts')).toBe('// custom\n');
+		expect(await read('oxfmt.config.ts')).toBe('// custom\n');
+		expect(plan.files.join('\n')).not.toMatch(/oxlint\.config|oxfmt\.config/);
+	});
+});
+
 describe('.gitignore', () => {
 	it('leaves entries that are already there', async () => {
 		await writeFiles({ 'package.json': { name: 'consumer' }, '.gitignore': 'node_modules\n/build\n.claude\n' });
@@ -613,7 +670,7 @@ describe('createPlan', () => {
 		expect(hasChanges(plan)).toBe(true);
 		expect(await readJson('package.json')).toEqual({ name: 'consumer', devDependencies: { eslint: '^9.0.0' } });
 		expect(existsSync(path.join(dir, 'eslint.config.mjs'))).toBe(true);
-		expect(existsSync(path.join(dir, 'oxlint.config.ts'))).toBe(false);
+		expect(existsSync(path.join(dir, 'oxlint.config.mts'))).toBe(false);
 	});
 
 	it('keeps the indentation of package.json', async () => {
@@ -694,7 +751,7 @@ describe('formatPlan', () => {
 				`  - add @particle/tooling ${TOOLING_SPEC} (installs oxlint, oxfmt and oxlint-tsgolint as peer dependencies)`
 			)
 		);
-		expect(text).toContain(green('  - create oxlint.config.ts'));
+		expect(text).toContain(green('  - create oxlint.config.mts'));
 	});
 
 	it('has no color codes when color is off', async () => {
@@ -764,6 +821,6 @@ describe('particle-tooling-init bin', () => {
 			code: 1,
 			stderr: expect.stringContaining('Pass --style and --yes when not running interactively')
 		});
-		expect(existsSync(path.join(dir, 'oxlint.config.ts'))).toBe(false);
+		expect(existsSync(path.join(dir, 'oxlint.config.mts'))).toBe(false);
 	});
 });
