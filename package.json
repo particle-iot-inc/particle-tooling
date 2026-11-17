@@ -6,7 +6,7 @@
 	"bugs": {
 		"url": "https://github.com/particle-iot-inc/particle-tooling/issues"
 	},
-	"license": "ISC",
+	"license": "Apache-2.0",
 	"author": "",
 	"repository": {
 		"type": "git",
@@ -43,7 +43,7 @@
 		"./tsconfig/*.json": "./tsconfig/*.json"
 	},
 	"publishConfig": {
-		"access": "restricted"
+		"access": "public"
 	},
 	"scripts": {
 		"check": "oxlint --deny-warnings && oxfmt --check",
