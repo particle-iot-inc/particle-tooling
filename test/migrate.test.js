@@ -98,7 +98,13 @@ describe('a new project', () => {
 
 		const plan = await migrate('js');
 
-		expect(plan.files).toEqual(['create oxlint.config.ts', 'create oxfmt.config.ts', 'create tsconfig.json']);
+		expect(plan.files).toEqual([
+			'create oxlint.config.ts',
+			'create oxfmt.config.ts',
+			'create tsconfig.json',
+			'add .claude/ to .gitignore'
+		]);
+		expect(await read('.gitignore')).toBe('.claude/\n');
 		expect(await read('oxlint.config.ts')).toBe("export { default } from '@particle/tooling/oxlint';\n");
 		expect(await read('oxfmt.config.ts')).toBe("export { default } from '@particle/tooling/oxfmt';\n");
 		expect(await readJson('tsconfig.json')).toEqual({ extends: '@particle/tooling/tsconfig/js.json' });
@@ -114,7 +120,7 @@ describe('a new project', () => {
 
 		expect(await readJson('tsconfig.json')).toEqual({ extends: '@particle/tooling/tsconfig/ts.json' });
 		expect(await readJson('tsconfig.build.json')).toEqual({ extends: '@particle/tooling/tsconfig/ts-build.json' });
-		expect(await read('.gitignore')).toBe('build/\n');
+		expect(await read('.gitignore')).toBe('build/\n.claude/\n');
 		const pkg = await readJson('package.json');
 		expect(pkg.devDependencies).toEqual({
 			'@particle/tooling': TOOLING_SPEC,
@@ -376,7 +382,7 @@ describe('existing tsconfigs', () => {
 		const plan = await migrate('ts-service');
 
 		expect(existsSync(path.join(dir, 'tsconfig.build.json'))).toBe(false);
-		expect(existsSync(path.join(dir, '.gitignore'))).toBe(false);
+		expect(await read('.gitignore')).toBe('.claude/\n');
 		expect((await readJson('package.json')).scripts.build).toBe('node build.mjs');
 		expect(plan.attention).toContainEqual(
 			expect.stringContaining('No tsconfig.build.json was found, so none was added')
@@ -407,7 +413,7 @@ describe('existing tsconfigs', () => {
 		expect(await readJson('tsconfig.build.json')).toEqual({
 			extends: '@particle/tooling/tsconfig/ts-build-library.json'
 		});
-		expect(await read('.gitignore')).toBe('node_modules\ndist\nbuild/\n');
+		expect(await read('.gitignore')).toBe('node_modules\ndist\nbuild/\n.claude/\n');
 		expect(plan.attention).toContainEqual(
 			'Build output moves from dist/ to build/. Update these references to the old directory by hand: package.json main, package.json types, package.json files, package.json scripts.build, .gitignore, Dockerfile.'
 		);
@@ -425,7 +431,7 @@ describe('existing tsconfigs', () => {
 
 		expect(await readJson('tsconfig.json')).toEqual(tsconfig);
 		expect(await readJson('tsconfig.build.json')).toEqual(build);
-		expect(existsSync(path.join(dir, '.gitignore'))).toBe(false);
+		expect(await read('.gitignore')).toBe('.claude/\n');
 		expect((await readJson('package.json')).scripts.build).toBeUndefined();
 		expect(plan.attention).toContainEqual(
 			expect.stringContaining(
@@ -488,6 +494,17 @@ describe('existing tsconfigs', () => {
 				'tsconfig.json has project-specific compiler options (strict, module), so it was left alone'
 			)
 		);
+	});
+});
+
+describe('.gitignore', () => {
+	it('leaves entries that are already there', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer' }, '.gitignore': 'node_modules\n/build\n.claude\n' });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read('.gitignore')).toBe('node_modules\n/build\n.claude\n');
+		expect(plan.files.join('\n')).not.toContain('.gitignore');
 	});
 });
 
