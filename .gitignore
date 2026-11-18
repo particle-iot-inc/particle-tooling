@@ -6,3 +6,4 @@ coverage/
 .vscode
 *.tgz
 .claude/
+CLAUDE.md
