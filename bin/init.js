@@ -118,7 +118,7 @@ if (import.meta.main) {
 			const code = await npm(dir, ['install']);
 			if (code !== 0) {
 				fail(
-					'npm install failed. The file changes above are in place. See "If an install fails" in the README (https://github.com/particle-iot-inc/particle-tooling#if-an-install-fails) for the known causes, then run npm install again.'
+					'npm install failed. The file changes above are in place. See "If an install fails" in the README (https://github.com/particle-iot/particle-tooling#if-an-install-fails) for the known causes, then run npm install again.'
 				);
 			}
 		}
