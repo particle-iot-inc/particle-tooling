@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -57,6 +57,17 @@ const read = (file) => readFile(path.join(dir, file), 'utf8');
  * @returns {Promise<any>}
  */
 const readJson = async (file) => JSON.parse(await read(file));
+
+/**
+ * @returns {Promise<{ args: string[], devDependencies: string[] }[]>} each npm call, with the devDependencies package.json listed at that moment
+ */
+async function npmCalls() {
+	const log = await read('npm-calls.log');
+	return log
+		.trim()
+		.split('\n')
+		.map((line) => JSON.parse(line));
+}
 
 /**
  * @param {Record<string, string | object>} files contents by path relative to the temp dir. Objects are written as JSON.
@@ -180,6 +191,7 @@ describe('an ESLint project', () => {
 			vitest: '^4.1.2'
 		});
 		expect(pkg.dependencies).toEqual({ zod: '^4.0.0' });
+		expect(plan.uninstall).toEqual(['eslint', 'eslint-config-particle']);
 	});
 
 	it('deletes the old lint and format configs and says which cannot be restored', async () => {
@@ -494,6 +506,55 @@ describe('existing tsconfigs', () => {
 				'tsconfig.json has project-specific compiler options (strict, module), so it was left alone'
 			)
 		);
+	});
+});
+
+describe('dependencies that do not accept TypeScript 7', () => {
+	const lockfile = {
+		lockfileVersion: 3,
+		packages: {
+			'node_modules/typedoc': { version: '0.28.17', peerDependencies: { typescript: '5.0.x || 5.1.x || 5.9.x' } },
+			'node_modules/tsx': { version: '4.21.0' },
+			'node_modules/ts-api-utils': { version: '2.5.0', peerDependencies: { typescript: '>=4.8.4' } },
+			'node_modules/typescript-eslint': { version: '8.57.2', peerDependencies: { typescript: '>=4.8.4 <6.1.0' } }
+		}
+	};
+	const devDependencies = {
+		typedoc: '^0.28.17',
+		tsx: '^4.21.0',
+		'ts-api-utils': '^2.5.0',
+		'typescript-eslint': '^8.57.2',
+		typescript: '^5.9.2'
+	};
+
+	it('are listed before the migration is applied', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer', devDependencies }, 'package-lock.json': lockfile });
+
+		const plan = await createPlan(dir, 'ts-library');
+
+		const conflicts = plan.attention.filter((note) => note.includes('only accepts typescript'));
+		expect(conflicts).toEqual([
+			'typedoc@0.28.17 only accepts typescript "5.0.x || 5.1.x || 5.9.x". npm install will fail with ERESOLVE until it is upgraded to a release that supports TypeScript 7, or removed.'
+		]);
+	});
+
+	it('are not reported when TypeScript is already on 7', async () => {
+		await writeFiles({
+			'package.json': { name: 'consumer', devDependencies: { ...devDependencies, typescript: '^7.0.2' } },
+			'package-lock.json': lockfile
+		});
+
+		const plan = await createPlan(dir, 'ts-library');
+
+		expect(plan.attention.filter((note) => note.includes('only accepts typescript'))).toEqual([]);
+	});
+
+	it('are skipped without a lockfile', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer', devDependencies } });
+
+		const plan = await createPlan(dir, 'ts-library');
+
+		expect(plan.attention.filter((note) => note.includes('only accepts typescript'))).toEqual([]);
 	});
 });
 
@@ -836,5 +897,78 @@ describe('particle-tooling-init bin', () => {
 			stderr: expect.stringContaining('Pass --style and --yes when not running interactively')
 		});
 		expect(existsSync(path.join(dir, 'oxlint.config.mts'))).toBe(false);
+	});
+
+	describe('running npm', () => {
+		const FAKE_NPM = `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+const call = { args, devDependencies: Object.keys(pkg.devDependencies ?? {}) };
+appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify(call) + '\\n');
+process.exit(args[0] === process.env.FAKE_NPM_FAIL ? 1 : 0);
+`;
+
+		/**
+		 * Runs the bin with a stand-in npm first on the PATH.
+		 * @param {{ fail?: string }} [options] fail names an npm command that exits with an error
+		 * @returns {Promise<{ stdout: string, stderr: string }>}
+		 */
+		async function runWithFakeNpm({ fail } = {}) {
+			const fakeBin = path.join(dir, 'fake-bin');
+			await writeFiles({ 'fake-bin/npm': FAKE_NPM });
+			await chmod(path.join(fakeBin, 'npm'), 0o755);
+			return execFile(process.execPath, [bin, '--style', 'ts-service', '--yes'], {
+				cwd: dir,
+				env: {
+					...process.env,
+					PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`,
+					FAKE_NPM_LOG: path.join(dir, 'npm-calls.log'),
+					FAKE_NPM_FAIL: fail ?? ''
+				}
+			});
+		}
+
+		it('uninstalls the removed packages before package.json changes, then installs', async () => {
+			await writeFiles({
+				'package.json': {
+					name: 'consumer',
+					devDependencies: { eslint: '^9.0.0', 'eslint-config-particle': '^3.0.0', typescript: '^6.0.2' }
+				}
+			});
+
+			const { stdout } = await runWithFakeNpm();
+
+			expect(await npmCalls()).toEqual([
+				{
+					args: ['uninstall', 'eslint', 'eslint-config-particle'],
+					devDependencies: ['eslint', 'eslint-config-particle', 'typescript']
+				},
+				{ args: ['install'], devDependencies: ['@particle/tooling', 'typescript'] }
+			]);
+			expect(stdout).toMatch(/First: npm uninstall eslint eslint-config-particle/);
+			expect(stdout).toMatch(/Then: npm install/);
+		});
+
+		it('only installs when no packages are removed', async () => {
+			await writeFiles({ 'package.json': { name: 'consumer', devDependencies: { typescript: '^6.0.2' } } });
+
+			await runWithFakeNpm();
+
+			expect((await npmCalls()).map(({ args }) => args)).toEqual([['install']]);
+		});
+
+		it('changes nothing when the uninstall fails', async () => {
+			const pkg = { name: 'consumer', devDependencies: { eslint: '^9.0.0', typescript: '^6.0.2' } };
+			await writeFiles({ 'package.json': pkg });
+
+			await expect(runWithFakeNpm({ fail: 'uninstall' })).rejects.toMatchObject({
+				code: 1,
+				stderr: expect.stringContaining('npm uninstall failed. Nothing else was changed')
+			});
+			expect(await readJson('package.json')).toEqual(pkg);
+			expect(existsSync(path.join(dir, 'oxlint.config.mts'))).toBe(false);
+			expect((await npmCalls()).map(({ args }) => args)).toEqual([['uninstall', 'eslint']]);
+		});
 	});
 });

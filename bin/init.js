@@ -51,11 +51,12 @@ async function askStyle(prompt, detected) {
 
 /**
  * @param {string} dir
- * @returns {Promise<number>} the exit code of npm install
+ * @param {string[]} args
+ * @returns {Promise<number>} the exit code of npm
  */
-function npmInstall(dir) {
+function npm(dir, args) {
 	const { promise, resolve, reject } = Promise.withResolvers();
-	const child = spawn('npm', ['install'], { cwd: dir, stdio: 'inherit' });
+	const child = spawn('npm', args, { cwd: dir, stdio: 'inherit' });
 	child.on('error', reject);
 	child.on('close', resolve);
 	return promise;
@@ -95,17 +96,29 @@ if (import.meta.main) {
 		}
 		console.log(`\nMigrating ${path.basename(dir)} as a ${STYLES[style]}. Nothing has been changed yet.\n`);
 		console.log(formatPlan(plan));
-		console.log(values.install ? '\nThen: npm install\n' : '');
+		const uninstall = values.install && plan.uninstall.length > 0 ? ['uninstall', ...plan.uninstall] : null;
+		if (uninstall) {
+			console.log(`\nFirst: npm ${uninstall.join(' ')} (before the changes above, so the lockfile drops them)`);
+		}
+		console.log(values.install ? `${uninstall ? '' : '\n'}Then: npm install\n` : '');
 		if (!values.yes && !/^y(es)?$/i.test(await ask(prompt, 'Apply these changes? [y/N] '))) {
 			fail('No changes made.');
 		}
+		if (uninstall && (await npm(dir, uninstall)) !== 0) {
+			fail('npm uninstall failed. Nothing else was changed: fix the error and run the migration again.');
+		}
 		await applyPlan(dir, plan);
 		console.log('Changes applied.');
+		if (!values.install && plan.uninstall.length > 0) {
+			console.log(
+				`npm was not run. The lockfile still lists ${plan.uninstall.join(', ')}. If npm install fails with ERESOLVE naming one of them, run npm install --force once: they are no longer in package.json, so the forced install prunes them.`
+			);
+		}
 		if (values.install) {
-			const code = await npmInstall(dir);
+			const code = await npm(dir, ['install']);
 			if (code !== 0) {
 				fail(
-					'npm install failed. The file changes above are in place: fix the install error and run npm install again.'
+					'npm install failed. The file changes above are in place. See "If an install fails" in the README (https://github.com/particle-iot-inc/particle-tooling#if-an-install-fails) for the known causes, then run npm install again.'
 				);
 			}
 		}

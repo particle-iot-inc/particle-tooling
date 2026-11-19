@@ -28,7 +28,8 @@ What it does, depending on what it finds:
 - **Build output:** standardizes on `build/`, adds it to `.gitignore`, and lists every place that still names the old directory (`package.json` fields, scripts, `Dockerfile`, CI config) for you to update.
 - **Scripts:** removes a `lint` script and has `check` do the linting: plain `eslint` steps become `oxlint --deny-warnings` (so a warning fails the check, in CI too), `check` gains `oxfmt --check`, and other scripts that ran `npm run lint` are pointed at `npm run check`. Adds `fmt` where it is missing, a `check` for TypeScript projects (`tsc && oxlint --deny-warnings && oxfmt --check`) and for JavaScript projects that had a `lint` script, and `build` for TypeScript projects.
 - **CI:** looks at `.circleci/config.yml` and `.github/workflows` and reminds you to confirm that CI runs a step that checks formatting.
-- **Install:** runs `npm install` at the end.
+- **Install:** runs `npm uninstall` for the removed packages before changing anything, then `npm install` at the end. The uninstall comes first so the lockfile drops typescript-eslint, which does not accept TypeScript 7 and would otherwise make `npm install` fail with `ERESOLVE`. Other conflicts can still stop the install: see [If an install fails](#if-an-install-fails).
+- **TypeScript 7 conflicts:** before you confirm, lists any remaining dependency whose locked version does not accept TypeScript 7, such as an older `typedoc`.
 
 Anything it cannot decide for you is listed under "Needs your attention", before you confirm and again at the end.
 
@@ -38,7 +39,16 @@ Options:
 | -------------- | ----------------------------------------------------- |
 | `--style`      | Skip the style question                               |
 | `--yes`, `-y`  | Apply without asking. Required when not in a terminal |
-| `--no-install` | Skip `npm install`                                    |
+| `--no-install` | Skip `npm uninstall` and `npm install`                |
+
+### If an install fails
+
+The file changes are already in place when `npm install` fails, so fix the cause and run `npm install` again. The known causes:
+
+- **`ERESOLVE` naming typescript-eslint:** the lockfile still lists the removed ESLint packages. This happens with `--no-install`, or with a version of this package before 0.1.9. Run `npm install --force` once. The conflict is between packages that are no longer in `package.json`, so the forced install prunes them and leaves a valid tree. A plain `npm install` works after that.
+- **`ERESOLVE` naming another package's `typescript` range:** a remaining dependency does not support TypeScript 7. The plan lists these under "Needs your attention". Upgrade or remove that dependency.
+- **`ERESOLVE` naming `vitest` through `vite-plus` or `@vitest/browser-playwright`:** npm 10 mishandles a chain of optional peer dependencies when the lockfile pins an older vitest 3 patch. Run the install once with npm 11 (`npx npm@11 install`), or bump `vitest` and `@vitest/coverage-v8` to the latest 3.x first. npm 10 installs from the resulting lockfile without trouble.
+- **`Cannot read properties of null (reading 'edgesOut')`:** an npm 10 bug ([npm/cli#9787](https://github.com/npm/cli/issues/9787)) that `oxfmt` and vitest 4 together trigger when npm resolves without a lockfile, or on `npm update`. Do not delete `package-lock.json` to get past an install error. If it is already gone, regenerate it with npm 11.6 or later (`npx npm@11 install`). npm 10 installs from that lockfile without trouble.
 
 After migrating, format the project once and commit that separately:
 
