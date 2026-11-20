@@ -24,7 +24,9 @@
 		"oxlint-typescript.js",
 		"oxlint.d.ts",
 		"oxlint.js",
-		"tsconfig"
+		"tsconfig",
+		"vitest.d.ts",
+		"vitest.js"
 	],
 	"type": "module",
 	"exports": {
@@ -39,6 +41,10 @@
 		"./oxfmt": {
 			"types": "./oxfmt.d.ts",
 			"default": "./oxfmt.js"
+		},
+		"./vitest": {
+			"types": "./vitest.d.ts",
+			"default": "./vitest.js"
 		},
 		"./tsconfig/*.json": "./tsconfig/*.json"
 	},
@@ -61,10 +67,14 @@
 		"oxfmt": "~0.78.0",
 		"oxlint": "^1.93.0",
 		"oxlint-tsgolint": "^7.0.2007",
-		"typescript": "^7.0.2"
+		"typescript": "^7.0.2",
+		"vitest": ">=3.2.0"
 	},
 	"peerDependenciesMeta": {
 		"typescript": {
+			"optional": true
+		},
+		"vitest": {
 			"optional": true
 		}
 	},

@@ -1,0 +1,79 @@
+version: 2.1
+
+# Explicit tag filters to trigger workflows on tags
+tag_filters: &tag_filters
+  filters:
+    tags:
+      only:
+        - /.+/
+
+orbs:
+  particle-artifact: particle-iot/particle-artifact@2
+
+  particle-node:
+    orbs:
+      node: circleci/node@5.0.2
+      go: circleci/go@2.2.1
+    executors:
+      node:
+        parameters:
+          mongo-version:
+            description: 'mongo version tag'
+            default: '8.0'
+            type: string
+        docker:
+          - image: cimg/node:24.22
+          - image: mongo:<<parameters.mongo-version>>
+            command: [--replSet, rs0, --port, '27020']
+            # A comment between keys of a service container.
+            environment:
+              GLIBC_TUNABLES: glibc.pthread.rseq=1
+    jobs:
+      unit-test:
+        executor:
+          name: node
+        environment:
+          REDIS_DATA_PLANE: |
+            [{"host":"localhost","port":6379}]
+        steps:
+          - checkout
+          - run:
+              name: Configure NPM Token
+              command: npm config set //registry.npmjs.org/:_authToken=$NPM_TOKEN
+          - node/install-packages
+          - run:
+              name: Typescript/Lint Check
+              command: npm run check
+          - run:
+              name: Run tests
+              command: npm run test
+      integration-test:
+        executor: node
+        parameters:
+          tests-dir:
+            description: Path to go tests folder
+            type: string
+        steps:
+          - checkout
+          - run:
+              name: Run integration tests
+              command: |
+                go test -v -timeout 45m | tee test_output.log
+                ~/go/bin/terratest_log_parser -testlog test_output.log -outputdir test_output
+              working_directory: << parameters.tests-dir >>
+          - store_test_results:
+              path: << parameters.tests-dir >>/test_output
+
+workflows:
+  version: 2
+  test-build-push:
+    jobs:
+      - particle-node/unit-test:
+          context: particle-ci-private
+          <<: *tag_filters
+      - particle-node/integration-test:
+          context: particle-ci-private
+          <<: *tag_filters
+          requires:
+            - particle-node/unit-test
+          tests-dir: test/integration

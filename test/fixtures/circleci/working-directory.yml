@@ -1,0 +1,48 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@5.0.3
+
+jobs:
+  run-tests:
+    parameters:
+      node-version:
+        description: 'node version tag'
+        type: string
+      app-dir:
+        description: directory containing node application
+        type: string
+        default: '~/project'
+    docker:
+      - image: cimg/node:<<parameters.node-version>>
+      - name: redis_discovery
+        image: redis:6
+        command: --port 7379
+
+    steps:
+      - checkout
+      - node/install-packages:
+          app-dir: << parameters.app-dir >>
+      - run:
+          name: Lint
+          working_directory: << parameters.app-dir >>
+          command: npm run check
+      - run:
+          name: Run Tests
+          working_directory: << parameters.app-dir >>
+          command: npm run coverage
+          environment:
+            REDIS_HOST: 'redis_discovery'
+            REDIS_DATA_PLANE: '[{"host":"redis_data","port":6379}, {"host":"redis_discovery","port":7379}]'
+      - store_artifacts:
+          path: coverage
+
+workflows:
+  version: 2
+  test:
+    jobs:
+      - run-tests:
+          name: 'run-tests: Node <<matrix.node-version>>'
+          matrix:
+            parameters:
+              node-version: ['22', '26']

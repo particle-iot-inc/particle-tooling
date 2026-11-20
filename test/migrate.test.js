@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyPlan, createPlan, detectStyle, formatPlan, hasChanges } from '../lib/migrate.js';
 import toolingPackage from '../package.json' with { type: 'json' };
@@ -718,6 +718,441 @@ describe('sourceRoot', () => {
 			extends: '@particle/tooling/tsconfig/ts.json',
 			compilerOptions: { sourceRoot: '/' }
 		});
+	});
+});
+
+describe('the Vitest config', () => {
+	/** Shaped like the configs in the Vitest repositories: one defineConfig call, comments, a setup file. */
+	const CONFIG = `import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+	test: {
+		// Initialize tracing before any \`src\` import runs (see setup()).
+		setupFiles: ['./src/test-setup.ts']
+	}
+});
+`;
+	const WRAPPED = `import shared from '@particle/tooling/vitest';
+import { defineConfig, mergeConfig } from 'vitest/config';
+
+export default mergeConfig(
+	shared,
+	defineConfig({
+		test: {
+			// Initialize tracing before any \`src\` import runs (see setup()).
+			setupFiles: ['./src/test-setup.ts']
+		}
+	})
+);
+`;
+	const VITEST_PROJECT = { name: 'consumer', type: 'module', devDependencies: { vitest: '^4.1.2' } };
+
+	it('is left alone in a project without vitest', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer' } });
+
+		const plan = await migrate('js');
+
+		expect(plan.files.join('\n')).not.toContain('vitest');
+		expect(existsSync(path.join(dir, 'vitest.config.mts'))).toBe(false);
+		expect(await read('.gitignore')).not.toContain('test-results');
+	});
+
+	it.each(['js', 'mjs', 'ts', 'mts'])('is wrapped with the shared config in vitest.config.%s', async (extension) => {
+		const file = `vitest.config.${extension}`;
+		await writeFiles({ 'package.json': VITEST_PROJECT, [file]: CONFIG });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain(`rewrite ${file} to merge @particle/tooling/vitest (JUnit test results in CircleCI)`);
+		expect(await read(file)).toBe(WRAPPED);
+		expect(plan.attention.join('\n')).not.toContain('vitest.config');
+	});
+
+	it('adds mergeConfig to the import and keeps a config without a blank line or semicolons', async () => {
+		await writeFiles({
+			'package.json': VITEST_PROJECT,
+			'vitest.config.mjs': `import { configDefaults, defineConfig } from "vitest/config"\nexport default defineConfig({\n  test: { exclude: [...configDefaults.exclude, "fixtures/**"] }\n})\n`
+		});
+
+		await migrate('js');
+
+		expect(await read('vitest.config.mjs')).toBe(
+			`import shared from "@particle/tooling/vitest";\nimport { configDefaults, defineConfig, mergeConfig } from "vitest/config"\nexport default mergeConfig(\n  shared,\n  defineConfig({\n    test: { exclude: [...configDefaults.exclude, "fixtures/**"] }\n  })\n)\n`
+		);
+	});
+
+	it('does not re-indent a config with a multi-line template literal', async () => {
+		const source =
+			"import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n\ttest: { name: `a\n  b` }\n});\n";
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': source });
+
+		await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(
+			"import shared from '@particle/tooling/vitest';\nimport { defineConfig, mergeConfig } from 'vitest/config';\n\nexport default mergeConfig(\n\tshared,\n\tdefineConfig({\n\ttest: { name: `a\n  b` }\n})\n);\n"
+		);
+	});
+
+	it.each([
+		['an ES module package', 'module', 'vitest.config.ts'],
+		['a CommonJS package', undefined, 'vitest.config.mts']
+	])('is created in %s that has none', async (_, type, file) => {
+		await writeFiles({ 'package.json': { ...VITEST_PROJECT, type } });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain(`create ${file}`);
+		expect(await read(file)).toBe("export { default } from '@particle/tooling/vitest';\n");
+	});
+
+	it('is not created when Vitest reads a vite.config', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vite.config.ts': 'export default {};\n' });
+
+		const plan = await migrate('ts-service');
+
+		expect(existsSync(path.join(dir, 'vitest.config.ts'))).toBe(false);
+		expect(plan.attention).toContain(
+			'Vitest reads its settings from vite.config.ts, so no vitest.config was created. Merge @particle/tooling/vitest into it: see the README.'
+		);
+	});
+
+	it.each([
+		[
+			'a function config',
+			"import { defineConfig } from 'vitest/config';\nexport default defineConfig(({ mode }) => ({ test: { name: mode } }));\n",
+			'it passes defineConfig a function or a variable, which mergeConfig cannot merge'
+		],
+		[
+			'a plain object',
+			'export default { test: { globals: true } };\n',
+			'its default export is not a defineConfig({...}) call'
+		],
+		[
+			'a call that is not the whole export',
+			"import { defineConfig } from 'vitest/config';\nexport default defineConfig({}) || {};\n",
+			'its default export is not a defineConfig({...}) call'
+		],
+		[
+			'defineConfig from elsewhere',
+			"import { defineConfig } from './config.js';\nexport default defineConfig({});\n",
+			'it does not import defineConfig from vitest/config'
+		],
+		[
+			'a CommonJS config',
+			"const { defineConfig } = require('vitest/config');\nmodule.exports = defineConfig({});\n",
+			'it is a CommonJS module'
+		],
+		[
+			'a config that already has a shared binding',
+			"import { defineConfig } from 'vitest/config';\nconst shared = {};\nexport default defineConfig({ test: shared });\n",
+			'it already uses the name "shared"'
+		]
+	])('is left alone and reported when it is %s', async (_, source, reason) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': source });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(source);
+		expect(plan.attention).toContain(
+			`vitest.config.ts was left alone because ${reason}. Merge @particle/tooling/vitest into it by hand: see the README.`
+		);
+	});
+
+	it('is left alone and reported when there are several', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': CONFIG, 'vitest.config.mjs': CONFIG });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(CONFIG);
+		expect(plan.attention).toContain(
+			'There are several Vitest configs (vitest.config.ts, vitest.config.mjs), so none was changed. Merge @particle/tooling/vitest into the one Vitest uses: see the README.'
+		);
+	});
+
+	it('gets test-results/ ignored once', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, '.gitignore': 'node_modules\n' });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain('add build/, test-results/, .claude/, and CLAUDE.md to .gitignore');
+		expect(await read('.gitignore')).toBe('node_modules\nbuild/\ntest-results/\n.claude/\nCLAUDE.md\n');
+	});
+
+	it('leaves an existing test-results entry', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, '.gitignore': '/test-results\n' });
+
+		await migrate('ts-service');
+
+		expect(await read('.gitignore')).toBe('/test-results\nbuild/\n.claude/\nCLAUDE.md\n');
+	});
+
+	it.each([
+		['wrapped', { 'vitest.config.ts': CONFIG }],
+		['created', {}]
+	])('has nothing more to change once %s', async (_, files) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, ...files });
+		await migrate('ts-service');
+		const before = await read('vitest.config.ts');
+
+		const plan = await createPlan(dir, 'ts-service');
+
+		expect(hasChanges(plan)).toBe(false);
+		expect(plan.attention.join('\n')).not.toContain('vitest');
+		expect(await read('vitest.config.ts')).toBe(before);
+	});
+});
+
+/**
+ * @param {string} name a file in test/fixtures/circleci
+ * @returns {Promise<string>}
+ */
+const fixture = (name) => readFile(path.resolve(import.meta.dirname, 'fixtures/circleci', name), 'utf8');
+
+const hasYq = await execFile('yq', ['--version']).then(
+	({ stdout }) => /mikefarah/.test(stdout),
+	() => false
+);
+
+/** The CircleCI edit needs mikefarah yq 4 on PATH. Without it these tests are skipped. */
+describe.skipIf(!hasYq)('the CircleCI config', () => {
+	const VITEST_PROJECT = { name: 'consumer', type: 'module', devDependencies: { vitest: '^5.1.0' } };
+	const CONFIG = '.circleci/config.yml';
+	const SNIPPET = '      - store_test_results:\n          path: test-results';
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	/**
+	 * @param {string} reason
+	 * @returns {string} the attention note for a config the migration did not change
+	 */
+	const byHand = (reason) =>
+		`${CONFIG} was not changed because ${reason}. Add this after the step that runs the tests in each test job, so CircleCI shows the results:\n${SNIPPET}`;
+
+	it.each([
+		[
+			'an inline orb job',
+			'inline-orb.yml',
+			'              command: npm run test\n',
+			'          - store_test_results:\n              path: test-results\n',
+			'add store_test_results (path test-results) after "npm run test" of job unit-test in .circleci/config.yml'
+		],
+		[
+			'a top-level matrix job',
+			'matrix.yml',
+			'          command: npm test\n',
+			'      - store_test_results:\n          path: test-results\n',
+			'add store_test_results (path test-results) after "npm test" of job run-tests in .circleci/config.yml'
+		],
+		[
+			'a step with its own working_directory',
+			'working-directory.yml',
+			`'[{"host":"redis_data","port":6379}, {"host":"redis_discovery","port":7379}]'\n`,
+			'      - store_test_results:\n          path: << parameters.app-dir >>/test-results\n',
+			'add store_test_results (path << parameters.app-dir >>/test-results) after "npm run coverage" of job run-tests in .circleci/config.yml'
+		]
+	])('gets store_test_results after the test step of %s and no other change', async (_, name, after, added, line) => {
+		const original = await fixture(name);
+		expect(original.split(after)).toHaveLength(2);
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace(after, `${after}${added}`));
+		expect(plan.files).toContain(line);
+		expect(plan.attention.join('\n')).not.toContain('store_test_results');
+	});
+
+	it('keeps blank lines, flow sequences and block scalars that yq would reformat', async () => {
+		const original = [
+			'version: 2.1',
+			'',
+			'executors:',
+			'  node:',
+			'    docker:',
+			'      - image: cimg/node:22',
+			'      - image: mongo:8',
+			'        command: [--replSet,rs0]',
+			'',
+			'jobs:',
+			'  test:',
+			'    executor: node',
+			'    steps:',
+			'      - checkout',
+			'      - run: npm ci',
+			'      - run: npm test',
+			'      - store_artifacts:',
+			'          path: coverage',
+			'      - run:',
+			'          name: Report',
+			'          command: |',
+			'            echo done ',
+			'',
+			'',
+			'workflows:',
+			'  main:',
+			'    jobs: [test]',
+			''
+		].join('\n');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace('      - run: npm test\n', `      - run: npm test\n${SNIPPET}\n`));
+	});
+
+	it.each([
+		[
+			'the last step of the last job, before workflows',
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n\nworkflows:\n  main:\n    jobs: [test]\n',
+			'      - run: npm test\n'
+		],
+		[
+			'the last step of a job, before the next job',
+			[
+				'jobs:',
+				'  unit-test:',
+				'    steps:',
+				'      - checkout',
+				'      - run:',
+				'          name: Run tests',
+				'          command: npm run test:ci',
+				'',
+				'  # Builds the package',
+				'  build:',
+				'    steps:',
+				'      - run: npm run build',
+				''
+			].join('\n'),
+			'          command: npm run test:ci\n'
+		],
+		[
+			'a multi-line step followed by a comment and a blank line',
+			[
+				'jobs:',
+				'  test:',
+				'    steps:',
+				'      - run:',
+				'          command: npm test',
+				'          environment:',
+				'            A: |',
+				'              one',
+				'',
+				'              two',
+				'      # the next step',
+				'',
+				'      - store_artifacts:',
+				'          path: coverage',
+				''
+			].join('\n'),
+			'              two\n'
+		]
+	])('gets store_test_results after the test step when it is %s', async (_, original, after) => {
+		expect(original.split(after)).toHaveLength(2);
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace(after, `${after}${SNIPPET}\n`));
+		expect(plan.attention.join('\n')).not.toContain(`${CONFIG} was not changed`);
+	});
+
+	it('is left alone and reported when the test step is not a block list item', async () => {
+		const original = 'jobs:\n  test:\n    steps: [checkout, {run: npm test}]\n';
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand('the edit could not be applied without reformatting the file'));
+	});
+
+	it.each([
+		[
+			'no test step',
+			'jobs:\n  test:\n    steps:\n      - run: npm run check\n',
+			'no step runs "npm test", "npm run test..." or "npm run coverage"'
+		],
+		[
+			'several test steps',
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n  coverage:\n    steps:\n      - run:\n          command: npm run coverage\n',
+			'several steps run the tests ("npm test", "npm run coverage")'
+		]
+	])('is left alone and reported with %s', async (_, original, reason) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand(reason));
+	});
+
+	it('is left alone and reported when yq is not on PATH', async () => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+		const tools = path.join(dir, 'bin');
+		await mkdir(tools);
+		vi.stubEnv('PATH', tools);
+
+		const plan = await createPlan(dir, 'ts-service');
+		await applyPlan(dir, plan);
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand('yq could not be found on PATH'));
+	});
+
+	it('is left alone and reports the error when yq fails on the edit', async () => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+		const tools = path.join(dir, 'bin');
+		await mkdir(tools);
+		const { stdout } = await execFile('which', ['yq']);
+		// A yq that predates array slices, the syntax the edit uses.
+		await writeFile(
+			path.join(tools, 'yq'),
+			`#!/bin/sh\nfor arg in "$@"; do case "$arg" in *'.[:'*) echo 'Error: invalid input text "[:3]"' >&2; exit 1;; esac; done\nexec ${stdout.trim()} "$@"\n`,
+			{ mode: 0o755 }
+		);
+		vi.stubEnv('PATH', `${tools}${path.delimiter}${process.env.PATH}`);
+
+		const plan = await createPlan(dir, 'ts-service');
+		await applyPlan(dir, plan);
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand('yq failed while preparing the edit (Error: invalid input text "[:3]")'));
+	});
+
+	it('is left alone when the test job already stores results', async () => {
+		const original =
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n      - store_test_results:\n          path: reports\n';
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention.join('\n')).not.toContain(`${CONFIG} was not changed`);
+	});
+
+	it('is left alone in a project without vitest', async () => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': { name: 'consumer' }, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.files.join('\n')).not.toContain('store_test_results');
+	});
+
+	it('has nothing more to change once results are stored', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: await fixture('inline-orb.yml') });
+		await migrate('ts-service');
+		const before = await read(CONFIG);
+
+		const plan = await createPlan(dir, 'ts-service');
+
+		expect(hasChanges(plan)).toBe(false);
+		expect(await read(CONFIG)).toBe(before);
 	});
 });
 

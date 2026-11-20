@@ -1,6 +1,6 @@
 # Shared tooling config for Particle
 
-Shared [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html) and TypeScript configuration for Particle projects.
+Shared [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html), TypeScript and [Vitest](https://vitest.dev/) configuration for Particle projects.
 
 ## Usage
 
@@ -27,6 +27,8 @@ What it does, depending on what it finds:
 - **`.gitignore`:** adds `.claude/` and `CLAUDE.md`. These are often ignored only in a developer's global gitignore, and oxlint and oxfmt only skip what the project's own `.gitignore` lists. Without the entries, agent worktrees (full copies of the repo) get linted and formatted along with the project, and a local `CLAUDE.md` fails the format check on one machine but not in CI.
 - **Build output:** standardizes on `build/`, adds it to `.gitignore`, and lists every place that still names the old directory (`package.json` fields, scripts, `Dockerfile`, CI config) for you to update.
 - **Scripts:** removes a `lint` script and has `check` do the linting: plain `eslint` steps become `oxlint --deny-warnings` (so a warning fails the check, in CI too), `check` gains `oxfmt --check`, and other scripts that ran `npm run lint` are pointed at `npm run check`. Adds `fmt` where it is missing, a `check` for TypeScript projects (`tsc && oxlint --deny-warnings && oxfmt --check`) and for JavaScript projects that had a `lint` script, and `build` for TypeScript projects.
+- **Vitest:** in a project that depends on `vitest`, wraps the `export default defineConfig({...})` in `vitest.config.*` with `mergeConfig` and the [shared Vitest config](#vitest-config), or creates a `vitest.config.ts` (`.mts` outside an ES module package) that re-exports it. A config it cannot rewrite safely, such as one that passes `defineConfig` a function, is left alone and reported. Adds `test-results/` to `.gitignore`.
+- **CircleCI test results:** in a project that depends on `vitest`, adds a `store_test_results` step after the step in `.circleci/config.yml` that runs `npm test`, `npm run test…` or `npm run coverage`, in a top-level job or an inline orb's job. A test step with its own `working_directory` gets it in the stored path. [yq](https://github.com/mikefarah/yq) (version 4) finds the test step, and the new step is inserted as text after it, so the rest of the file keeps its formatting. Without yq, when yq fails, with no test step or several, or when the result would not match yq's own edit, the file is left alone and the step to add is printed instead.
 - **CI:** looks at `.circleci/config.yml` and `.github/workflows` and reminds you to confirm that CI runs a step that checks formatting.
 - **Install:** runs `npm uninstall` for the removed packages before changing anything, then `npm install` at the end. The uninstall comes first so the lockfile drops typescript-eslint, which does not accept TypeScript 7 and would otherwise make `npm install` fail with `ERESOLVE`. Other conflicts can still stop the install: see [If an install fails](#if-an-install-fails).
 - **TypeScript 7 conflicts:** before you confirm, lists any remaining dependency whose locked version does not accept TypeScript 7, such as an older `typedoc`.
@@ -143,12 +145,43 @@ A JavaScript project has one file. It covers the whole project unless `include` 
 { "extends": "@particle/tooling/tsconfig/js.json" }
 ```
 
+## Vitest config
+
+`@particle/tooling/vitest` reports test results to CircleCI. Merge it under the project's own Vitest config:
+
+```ts
+// vitest.config.ts
+import shared from '@particle/tooling/vitest';
+import { defineConfig, mergeConfig } from 'vitest/config';
+
+export default mergeConfig(
+	shared,
+	defineConfig({
+		test: { setupFiles: ['./src/test-setup.ts'] }
+	})
+);
+```
+
+When `CIRCLECI` is set, it keeps the default console reporter and adds Vitest's JUnit reporter, writing `test-results/junit.xml` with a `file` attribute on each test case (CircleCI uses it for timing data). Anything a test logs goes into the report too. Anywhere else it sets nothing, so local runs are unchanged and write no file. It applies whichever npm script CI runs.
+
+Add `test-results/` to `.gitignore`, so oxlint and oxfmt skip the report, and store it after the test step in each CircleCI test job:
+
+```yaml
+- run: npm test
+- store_test_results:
+    path: test-results
+```
+
+`vitest` is an optional peer dependency, from version 3.2. A project that sets its own `reporters` gets them in addition to these: `mergeConfig` concatenates arrays.
+
 ## Development
 
 ```shell
 $ npm run check   # lint and format check
 $ npm test
 ```
+
+The CircleCI migration tests need [yq](https://github.com/mikefarah/yq) version 4 on `PATH`, and are skipped without it.
 
 To try local changes in another project, pack this one and point the migration at the tarball:
 
