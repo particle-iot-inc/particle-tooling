@@ -1052,6 +1052,27 @@ describe.skipIf(!hasYq)('the CircleCI config', () => {
 		expect(plan.attention).toContain(byHand(`${missing} could not be found on PATH`));
 	});
 
+	it('is left alone and reports the error when yq fails on the edit', async () => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+		const tools = path.join(dir, 'bin');
+		await mkdir(tools);
+		const { stdout } = await execFile('which', ['yq']);
+		// A yq that predates array slices, the syntax the edit uses.
+		await writeFile(
+			path.join(tools, 'yq'),
+			`#!/bin/sh\nfor arg in "$@"; do case "$arg" in *'.[:'*) echo 'Error: invalid input text "[:3]"' >&2; exit 1;; esac; done\nexec ${stdout.trim()} "$@"\n`,
+			{ mode: 0o755 }
+		);
+		vi.stubEnv('PATH', `${tools}${path.delimiter}${process.env.PATH}`);
+
+		const plan = await createPlan(dir, 'ts-service');
+		await applyPlan(dir, plan);
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand('yq failed while preparing the edit (Error: invalid input text "[:3]")'));
+	});
+
 	it('is left alone when the test job already stores results', async () => {
 		const original =
 			'jobs:\n  test:\n    steps:\n      - run: npm test\n      - store_test_results:\n          path: reports\n';
