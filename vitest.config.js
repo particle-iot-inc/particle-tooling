@@ -1,7 +1,12 @@
-import { configDefaults, defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig, mergeConfig } from 'vitest/config';
 
-export default defineConfig({
-	test: {
-		exclude: [...configDefaults.exclude, 'test/fixtures/**']
-	}
-});
+import shared from './vitest.js';
+
+export default mergeConfig(
+	shared,
+	defineConfig({
+		test: {
+			exclude: [...configDefaults.exclude, 'test/fixtures/**']
+		}
+	})
+);

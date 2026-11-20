@@ -1,6 +1,6 @@
 # Shared tooling config for Particle
 
-Shared [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html) and TypeScript configuration for Particle projects.
+Shared [oxlint](https://oxc.rs/docs/guide/usage/linter.html), [oxfmt](https://oxc.rs/docs/guide/usage/formatter.html), TypeScript and [Vitest](https://vitest.dev/) configuration for Particle projects.
 
 ## Usage
 
@@ -142,6 +142,35 @@ A JavaScript project has one file. It covers the whole project unless `include` 
 // tsconfig.json
 { "extends": "@particle/tooling/tsconfig/js.json" }
 ```
+
+## Vitest config
+
+`@particle/tooling/vitest` reports test results to CircleCI. Merge it under the project's own Vitest config:
+
+```ts
+// vitest.config.ts
+import shared from '@particle/tooling/vitest';
+import { defineConfig, mergeConfig } from 'vitest/config';
+
+export default mergeConfig(
+	shared,
+	defineConfig({
+		test: { setupFiles: ['./src/test-setup.ts'] }
+	})
+);
+```
+
+When `CIRCLECI` is set, it keeps the default console reporter and adds Vitest's JUnit reporter, writing `test-results/junit.xml` with a `file` attribute on each test case (CircleCI uses it for timing data). Anything a test logs goes into the report too. Anywhere else it sets nothing, so local runs are unchanged and write no file. It applies whichever npm script CI runs.
+
+Add `test-results/` to `.gitignore`, so oxlint and oxfmt skip the report, and store it after the test step in each CircleCI test job:
+
+```yaml
+- run: npm test
+- store_test_results:
+    path: test-results
+```
+
+`vitest` is an optional peer dependency, from version 3.2. A project that sets its own `reporters` gets them in addition to these: `mergeConfig` concatenates arrays.
 
 ## Development
 
