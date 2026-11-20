@@ -721,6 +721,187 @@ describe('sourceRoot', () => {
 	});
 });
 
+describe('the Vitest config', () => {
+	/** Shaped like the configs in the Vitest repositories: one defineConfig call, comments, a setup file. */
+	const CONFIG = `import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+	test: {
+		// Initialize tracing before any \`src\` import runs (see setup()).
+		setupFiles: ['./src/test-setup.ts']
+	}
+});
+`;
+	const WRAPPED = `import shared from '@particle/tooling/vitest';
+import { defineConfig, mergeConfig } from 'vitest/config';
+
+export default mergeConfig(
+	shared,
+	defineConfig({
+		test: {
+			// Initialize tracing before any \`src\` import runs (see setup()).
+			setupFiles: ['./src/test-setup.ts']
+		}
+	})
+);
+`;
+	const VITEST_PROJECT = { name: 'consumer', type: 'module', devDependencies: { vitest: '^4.1.2' } };
+
+	it('is left alone in a project without vitest', async () => {
+		await writeFiles({ 'package.json': { name: 'consumer' } });
+
+		const plan = await migrate('js');
+
+		expect(plan.files.join('\n')).not.toContain('vitest');
+		expect(existsSync(path.join(dir, 'vitest.config.mts'))).toBe(false);
+		expect(await read('.gitignore')).not.toContain('test-results');
+	});
+
+	it.each(['js', 'mjs', 'ts', 'mts'])('is wrapped with the shared config in vitest.config.%s', async (extension) => {
+		const file = `vitest.config.${extension}`;
+		await writeFiles({ 'package.json': VITEST_PROJECT, [file]: CONFIG });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain(`rewrite ${file} to merge @particle/tooling/vitest (JUnit test results in CircleCI)`);
+		expect(await read(file)).toBe(WRAPPED);
+		expect(plan.attention.join('\n')).not.toContain('vitest.config');
+	});
+
+	it('adds mergeConfig to the import and keeps a config without a blank line or semicolons', async () => {
+		await writeFiles({
+			'package.json': VITEST_PROJECT,
+			'vitest.config.mjs': `import { configDefaults, defineConfig } from "vitest/config"\nexport default defineConfig({\n  test: { exclude: [...configDefaults.exclude, "fixtures/**"] }\n})\n`
+		});
+
+		await migrate('js');
+
+		expect(await read('vitest.config.mjs')).toBe(
+			`import shared from "@particle/tooling/vitest";\nimport { configDefaults, defineConfig, mergeConfig } from "vitest/config"\nexport default mergeConfig(\n  shared,\n  defineConfig({\n    test: { exclude: [...configDefaults.exclude, "fixtures/**"] }\n  })\n)\n`
+		);
+	});
+
+	it('does not re-indent a config with a multi-line template literal', async () => {
+		const source =
+			"import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n\ttest: { name: `a\n  b` }\n});\n";
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': source });
+
+		await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(
+			"import shared from '@particle/tooling/vitest';\nimport { defineConfig, mergeConfig } from 'vitest/config';\n\nexport default mergeConfig(\n\tshared,\n\tdefineConfig({\n\ttest: { name: `a\n  b` }\n})\n);\n"
+		);
+	});
+
+	it.each([
+		['an ES module package', 'module', 'vitest.config.ts'],
+		['a CommonJS package', undefined, 'vitest.config.mts']
+	])('is created in %s that has none', async (_, type, file) => {
+		await writeFiles({ 'package.json': { ...VITEST_PROJECT, type } });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain(`create ${file}`);
+		expect(await read(file)).toBe("export { default } from '@particle/tooling/vitest';\n");
+	});
+
+	it('is not created when Vitest reads a vite.config', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vite.config.ts': 'export default {};\n' });
+
+		const plan = await migrate('ts-service');
+
+		expect(existsSync(path.join(dir, 'vitest.config.ts'))).toBe(false);
+		expect(plan.attention).toContain(
+			'Vitest reads its settings from vite.config.ts, so no vitest.config was created. Merge @particle/tooling/vitest into it: see the README.'
+		);
+	});
+
+	it.each([
+		[
+			'a function config',
+			"import { defineConfig } from 'vitest/config';\nexport default defineConfig(({ mode }) => ({ test: { name: mode } }));\n",
+			'it passes defineConfig a function or a variable, which mergeConfig cannot merge'
+		],
+		[
+			'a plain object',
+			'export default { test: { globals: true } };\n',
+			'its default export is not a defineConfig({...}) call'
+		],
+		[
+			'a call that is not the whole export',
+			"import { defineConfig } from 'vitest/config';\nexport default defineConfig({}) || {};\n",
+			'its default export is not a defineConfig({...}) call'
+		],
+		[
+			'defineConfig from elsewhere',
+			"import { defineConfig } from './config.js';\nexport default defineConfig({});\n",
+			'it does not import defineConfig from vitest/config'
+		],
+		[
+			'a CommonJS config',
+			"const { defineConfig } = require('vitest/config');\nmodule.exports = defineConfig({});\n",
+			'it is a CommonJS module'
+		],
+		[
+			'a config that already has a shared binding',
+			"import { defineConfig } from 'vitest/config';\nconst shared = {};\nexport default defineConfig({ test: shared });\n",
+			'it already uses the name "shared"'
+		]
+	])('is left alone and reported when it is %s', async (_, source, reason) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': source });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(source);
+		expect(plan.attention).toContain(
+			`vitest.config.ts was left alone because ${reason}. Merge @particle/tooling/vitest into it by hand: see the README.`
+		);
+	});
+
+	it('is left alone and reported when there are several', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, 'vitest.config.ts': CONFIG, 'vitest.config.mjs': CONFIG });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read('vitest.config.ts')).toBe(CONFIG);
+		expect(plan.attention).toContain(
+			'There are several Vitest configs (vitest.config.ts, vitest.config.mjs), so none was changed. Merge @particle/tooling/vitest into the one Vitest uses: see the README.'
+		);
+	});
+
+	it('gets test-results/ ignored once', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, '.gitignore': 'node_modules\n' });
+
+		const plan = await migrate('ts-service');
+
+		expect(plan.files).toContain('add build/, test-results/, .claude/, and CLAUDE.md to .gitignore');
+		expect(await read('.gitignore')).toBe('node_modules\nbuild/\ntest-results/\n.claude/\nCLAUDE.md\n');
+	});
+
+	it('leaves an existing test-results entry', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, '.gitignore': '/test-results\n' });
+
+		await migrate('ts-service');
+
+		expect(await read('.gitignore')).toBe('/test-results\nbuild/\n.claude/\nCLAUDE.md\n');
+	});
+
+	it.each([
+		['wrapped', { 'vitest.config.ts': CONFIG }],
+		['created', {}]
+	])('has nothing more to change once %s', async (_, files) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, ...files });
+		await migrate('ts-service');
+		const before = await read('vitest.config.ts');
+
+		const plan = await createPlan(dir, 'ts-service');
+
+		expect(hasChanges(plan)).toBe(false);
+		expect(plan.attention.join('\n')).not.toContain('vitest');
+		expect(await read('vitest.config.ts')).toBe(before);
+	});
+});
+
 describe('an already migrated project', () => {
 	it('has nothing to change', async () => {
 		await writeFiles({ 'package.json': { name: 'consumer' } });
