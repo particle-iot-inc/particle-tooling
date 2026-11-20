@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { applyPlan, createPlan, detectStyle, formatPlan, hasChanges } from '../lib/migrate.js';
 import toolingPackage from '../package.json' with { type: 'json' };
@@ -899,6 +899,189 @@ export default mergeConfig(
 		expect(hasChanges(plan)).toBe(false);
 		expect(plan.attention.join('\n')).not.toContain('vitest');
 		expect(await read('vitest.config.ts')).toBe(before);
+	});
+});
+
+/**
+ * @param {string} name a file in test/fixtures/circleci
+ * @returns {Promise<string>}
+ */
+const fixture = (name) => readFile(path.resolve(import.meta.dirname, 'fixtures/circleci', name), 'utf8');
+
+const hasYq = await execFile('yq', ['--version']).then(
+	({ stdout }) => /mikefarah/.test(stdout),
+	() => false
+);
+
+/** The CircleCI edit needs mikefarah yq 4, diff and patch on PATH. Without yq these tests are skipped. */
+describe.skipIf(!hasYq)('the CircleCI config', () => {
+	const VITEST_PROJECT = { name: 'consumer', type: 'module', devDependencies: { vitest: '^5.1.0' } };
+	const CONFIG = '.circleci/config.yml';
+	const SNIPPET = '      - store_test_results:\n          path: test-results';
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
+	/**
+	 * @param {string} reason
+	 * @returns {string} the attention note for a config the migration did not change
+	 */
+	const byHand = (reason) =>
+		`${CONFIG} was not changed because ${reason}. Add this after the step that runs the tests in each test job, so CircleCI shows the results:\n${SNIPPET}`;
+
+	it.each([
+		[
+			'an inline orb job',
+			'inline-orb.yml',
+			'              command: npm run test\n',
+			'          - store_test_results:\n              path: test-results\n',
+			'add store_test_results (path test-results) after "npm run test" of job unit-test in .circleci/config.yml'
+		],
+		[
+			'a top-level matrix job',
+			'matrix.yml',
+			'          command: npm test\n',
+			'      - store_test_results:\n          path: test-results\n',
+			'add store_test_results (path test-results) after "npm test" of job run-tests in .circleci/config.yml'
+		],
+		[
+			'a step with its own working_directory',
+			'working-directory.yml',
+			`'[{"host":"redis_data","port":6379}, {"host":"redis_discovery","port":7379}]'\n`,
+			'      - store_test_results:\n          path: << parameters.app-dir >>/test-results\n',
+			'add store_test_results (path << parameters.app-dir >>/test-results) after "npm run coverage" of job run-tests in .circleci/config.yml'
+		]
+	])('gets store_test_results after the test step of %s and no other change', async (_, name, after, added, line) => {
+		const original = await fixture(name);
+		expect(original.split(after)).toHaveLength(2);
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace(after, `${after}${added}`));
+		expect(plan.files).toContain(line);
+		expect(plan.attention.join('\n')).not.toContain('store_test_results');
+	});
+
+	it('keeps blank lines, flow sequences and block scalars that yq would reformat', async () => {
+		const original = [
+			'version: 2.1',
+			'',
+			'executors:',
+			'  node:',
+			'    docker:',
+			'      - image: cimg/node:22',
+			'      - image: mongo:8',
+			'        command: [--replSet,rs0]',
+			'',
+			'jobs:',
+			'  test:',
+			'    executor: node',
+			'    steps:',
+			'      - checkout',
+			'      - run: npm ci',
+			'      - run: npm test',
+			'      - store_artifacts:',
+			'          path: coverage',
+			'      - run:',
+			'          name: Report',
+			'          command: |',
+			'            echo done ',
+			'',
+			'',
+			'workflows:',
+			'  main:',
+			'    jobs: [test]',
+			''
+		].join('\n');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace('      - run: npm test\n', `      - run: npm test\n${SNIPPET}\n`));
+	});
+
+	it('is left alone and reported when the edit lands next to a line yq reformats', async () => {
+		const original = 'jobs:\n  test:\n    steps:\n      - run: npm test\n\nworkflows:\n  main:\n    jobs: [test]\n';
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand('the edit could not be applied without reformatting the file'));
+	});
+
+	it.each([
+		[
+			'no test step',
+			'jobs:\n  test:\n    steps:\n      - run: npm run check\n',
+			'no step runs "npm test", "npm run test..." or "npm run coverage"'
+		],
+		[
+			'several test steps',
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n  coverage:\n    steps:\n      - run:\n          command: npm run coverage\n',
+			'several steps run the tests ("npm test", "npm run coverage")'
+		]
+	])('is left alone and reported with %s', async (_, original, reason) => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand(reason));
+	});
+
+	it.each(['yq', 'diff', 'patch'])('is left alone and reported when %s is not on PATH', async (missing) => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+		const tools = path.join(dir, 'bin');
+		await mkdir(tools);
+		for (const tool of ['yq', 'diff', 'patch'].filter((name) => name !== missing)) {
+			// oxlint-disable-next-line no-await-in-loop
+			const { stdout } = await execFile('which', [tool]);
+			// oxlint-disable-next-line no-await-in-loop
+			await symlink(stdout.trim(), path.join(tools, tool));
+		}
+		vi.stubEnv('PATH', tools);
+
+		const plan = await createPlan(dir, 'ts-service');
+		await applyPlan(dir, plan);
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention).toContain(byHand(`${missing} could not be found on PATH`));
+	});
+
+	it('is left alone when the test job already stores results', async () => {
+		const original =
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n      - store_test_results:\n          path: reports\n';
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.attention.join('\n')).not.toContain(`${CONFIG} was not changed`);
+	});
+
+	it('is left alone in a project without vitest', async () => {
+		const original = await fixture('matrix.yml');
+		await writeFiles({ 'package.json': { name: 'consumer' }, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original);
+		expect(plan.files.join('\n')).not.toContain('store_test_results');
+	});
+
+	it('has nothing more to change once results are stored', async () => {
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: await fixture('inline-orb.yml') });
+		await migrate('ts-service');
+		const before = await read(CONFIG);
+
+		const plan = await createPlan(dir, 'ts-service');
+
+		expect(hasChanges(plan)).toBe(false);
+		expect(await read(CONFIG)).toBe(before);
 	});
 });
 
