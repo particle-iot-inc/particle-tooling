@@ -913,7 +913,7 @@ const hasYq = await execFile('yq', ['--version']).then(
 	() => false
 );
 
-/** The CircleCI edit needs mikefarah yq 4, diff and patch on PATH. Without yq these tests are skipped. */
+/** The CircleCI edit needs mikefarah yq 4 on PATH. Without it these tests are skipped. */
 describe.skipIf(!hasYq)('the CircleCI config', () => {
 	const VITEST_PROJECT = { name: 'consumer', type: 'module', devDependencies: { vitest: '^5.1.0' } };
 	const CONFIG = '.circleci/config.yml';
@@ -1002,8 +1002,64 @@ describe.skipIf(!hasYq)('the CircleCI config', () => {
 		expect(await read(CONFIG)).toBe(original.replace('      - run: npm test\n', `      - run: npm test\n${SNIPPET}\n`));
 	});
 
-	it('is left alone and reported when the edit lands next to a line yq reformats', async () => {
-		const original = 'jobs:\n  test:\n    steps:\n      - run: npm test\n\nworkflows:\n  main:\n    jobs: [test]\n';
+	it.each([
+		[
+			'the last step of the last job, before workflows',
+			'jobs:\n  test:\n    steps:\n      - run: npm test\n\nworkflows:\n  main:\n    jobs: [test]\n',
+			'      - run: npm test\n'
+		],
+		[
+			'the last step of a job, before the next job',
+			[
+				'jobs:',
+				'  unit-test:',
+				'    steps:',
+				'      - checkout',
+				'      - run:',
+				'          name: Run tests',
+				'          command: npm run test:ci',
+				'',
+				'  # Builds the package',
+				'  build:',
+				'    steps:',
+				'      - run: npm run build',
+				''
+			].join('\n'),
+			'          command: npm run test:ci\n'
+		],
+		[
+			'a multi-line step followed by a comment and a blank line',
+			[
+				'jobs:',
+				'  test:',
+				'    steps:',
+				'      - run:',
+				'          command: npm test',
+				'          environment:',
+				'            A: |',
+				'              one',
+				'',
+				'              two',
+				'      # the next step',
+				'',
+				'      - store_artifacts:',
+				'          path: coverage',
+				''
+			].join('\n'),
+			'              two\n'
+		]
+	])('gets store_test_results after the test step when it is %s', async (_, original, after) => {
+		expect(original.split(after)).toHaveLength(2);
+		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
+
+		const plan = await migrate('ts-service');
+
+		expect(await read(CONFIG)).toBe(original.replace(after, `${after}${SNIPPET}\n`));
+		expect(plan.attention.join('\n')).not.toContain(`${CONFIG} was not changed`);
+	});
+
+	it('is left alone and reported when the test step is not a block list item', async () => {
+		const original = 'jobs:\n  test:\n    steps: [checkout, {run: npm test}]\n';
 		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
 
 		const plan = await migrate('ts-service');
@@ -1032,24 +1088,18 @@ describe.skipIf(!hasYq)('the CircleCI config', () => {
 		expect(plan.attention).toContain(byHand(reason));
 	});
 
-	it.each(['yq', 'diff', 'patch'])('is left alone and reported when %s is not on PATH', async (missing) => {
+	it('is left alone and reported when yq is not on PATH', async () => {
 		const original = await fixture('matrix.yml');
 		await writeFiles({ 'package.json': VITEST_PROJECT, [CONFIG]: original });
 		const tools = path.join(dir, 'bin');
 		await mkdir(tools);
-		for (const tool of ['yq', 'diff', 'patch'].filter((name) => name !== missing)) {
-			// oxlint-disable-next-line no-await-in-loop
-			const { stdout } = await execFile('which', [tool]);
-			// oxlint-disable-next-line no-await-in-loop
-			await symlink(stdout.trim(), path.join(tools, tool));
-		}
 		vi.stubEnv('PATH', tools);
 
 		const plan = await createPlan(dir, 'ts-service');
 		await applyPlan(dir, plan);
 
 		expect(await read(CONFIG)).toBe(original);
-		expect(plan.attention).toContain(byHand(`${missing} could not be found on PATH`));
+		expect(plan.attention).toContain(byHand('yq could not be found on PATH'));
 	});
 
 	it('is left alone and reports the error when yq fails on the edit', async () => {
